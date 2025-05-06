@@ -16,9 +16,9 @@ class Chatbot:
         # Store vector store reference
         self.vector_store = vector_store
         
-        # Ollama API endpoint - to work inside Replit, we need to modify the connection
+        # Ollama API endpoint - , we need to modify the connection
         # For real deployment, this would be "http://localhost:11434"
-        # But since this is running in Replit, we need to make Ollama accessible
+        # we need to make Ollama accessible
         self.api_base = "https://your-ollama-service.com"  # This is a placeholder that needs to be replaced
         self.model = "llama3.1"  # Llama 3.1 model
     
@@ -34,7 +34,7 @@ class Chatbot:
             str: AI-generated answer
         """
         # For local development, we would check Ollama availability
-        # But since we're running in Replit, we'll simulate a response
+        # we'll simulate a response
         # In a real deployment, you would need to ensure Ollama is accessible
         
         # Search for relevant chunks in the vector store
@@ -83,7 +83,7 @@ class Chatbot:
         
         try:
             # In a real environment, we would connect to Ollama
-            # But for demonstration in Replit, we'll simulate a response
+            # we'll simulate a response
             
             # Extract the question from the last message
             user_question = question
