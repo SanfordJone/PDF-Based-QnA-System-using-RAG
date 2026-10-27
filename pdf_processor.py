@@ -1,98 +1,101 @@
-import os
-import tempfile
+import io
+
+from pypdf import PdfReader
+
+# Limits on uploaded files, so a very large or hostile PDF cannot exhaust memory
+MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_PAGES = 300
+
+
+class PDFError(ValueError):
+    """Raised when an uploaded file cannot be processed safely."""
+
 
 class PDFProcessor:
     """
     Class to handle PDF operations including text extraction and chunking
     """
-    
-    def extract_text(self, pdf_file):
+
+    def __init__(self, max_file_bytes=MAX_FILE_BYTES, max_pages=MAX_PAGES):
+        self.max_file_bytes = max_file_bytes
+        self.max_pages = max_pages
+
+    def extract_pages(self, pdf_bytes):
         """
-        Extract text from a PDF file
-        
+        Extract text from each page of a PDF
+
         Args:
-            pdf_file: File object (can be from FastAPI UploadFile)
-            
+            pdf_bytes (bytes): Raw PDF content
+
         Returns:
-            str: Extracted text content
+            list: One (page_number, text) tuple per page that has text
         """
-        text = ""
-        
-        # Create a temporary file to store the PDF
-        temp_dir = tempfile.mkdtemp()
-        temp_path = os.path.join(temp_dir, "temp.pdf")
-        
+        if not pdf_bytes:
+            raise PDFError("The file is empty.")
+        if len(pdf_bytes) > self.max_file_bytes:
+            raise PDFError(f"File is larger than {self.max_file_bytes // (1024 * 1024)} MB.")
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise PDFError("This does not look like a PDF file.")
+
         try:
-            # Save the content to a temporary file
-            with open(temp_path, "wb") as f:
-                f.write(pdf_file.read())
-            
-            # Try to use PyPDF2 if available
-            try:
-                import PyPDF2
-                
-                # Extract text from the saved PDF
-                with open(temp_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
-                    num_pages = len(reader.pages)
-                    
-                    for page_num in range(num_pages):
-                        page = reader.pages[page_num]
-                        text += page.extract_text() + "\n\n"
-            except ImportError:
-                print("PyPDF2 not available, trying alternative method...")
-                
-                # If PyPDF2 is not available, store file info instead
-                file_stats = os.stat(temp_path)
-                file_size = file_stats.st_size
-                text = f"PDF Document uploaded (size: {file_size} bytes)\n\n"
-                text += "The PDF content would be displayed here if PyPDF2 was available.\n"
-                text += "This is a demonstration of the application's structure."
-                
-            return text
+            reader = PdfReader(io.BytesIO(pdf_bytes))
         except Exception as e:
-            print(f"Error extracting text from PDF: {e}")
-            return ""
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            os.rmdir(temp_dir)
-    
+            raise PDFError(f"Could not read the PDF: {e}") from e
+
+        if reader.is_encrypted:
+            raise PDFError("Password protected PDFs are not supported.")
+        if len(reader.pages) > self.max_pages:
+            raise PDFError(f"PDF has more than {self.max_pages} pages.")
+
+        pages = []
+        for number, page in enumerate(reader.pages, start=1):
+            # extract_text() can return None or "" for image-only pages
+            text = (page.extract_text() or "").strip()
+            if text:
+                pages.append((number, text))
+        return pages
+
     def chunk_text(self, text, chunk_size=1000, chunk_overlap=200):
         """
-        Split text into chunks for processing
-        
+        Split text into overlapping chunks for processing
+
         Args:
             text (str): Text to chunk
             chunk_size (int): Maximum size of each chunk
             chunk_overlap (int): Overlap between chunks
-            
+
         Returns:
             list: List of text chunks
         """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if not 0 <= chunk_overlap < chunk_size:
+            raise ValueError("chunk_overlap must be at least 0 and smaller than chunk_size")
         if not text:
             return []
-            
+
         chunks = []
         start = 0
         text_length = len(text)
-        
+
         while start < text_length:
-            # Calculate end of chunk
             end = min(start + chunk_size, text_length)
-            
-            # If not at the end of text, find the last space to avoid splitting words
+
+            # If not at the end of text, break at the last space to avoid splitting words
             if end < text_length:
-                # Find the last space within the chunk
-                last_space = text.rfind(' ', start, end)
-                if last_space != -1:
+                last_space = text.rfind(" ", start, end)
+                if last_space > start:
                     end = last_space
-            
-            # Add the chunk to our list
-            chunks.append(text[start:end])
-            
-            # Move the start position, accounting for overlap
-            start = max(start + chunk_size - chunk_overlap, end)
-        
+
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            if end >= text_length:
+                break
+
+            # Step back by the overlap so neighbouring chunks share context,
+            # but always move forward so the loop cannot get stuck
+            start = max(end - chunk_overlap, start + 1)
+
         return chunks
