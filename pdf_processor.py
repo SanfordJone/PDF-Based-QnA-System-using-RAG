@@ -95,7 +95,12 @@ class PDFProcessor:
                 break
 
             # Step back by the overlap so neighbouring chunks share context,
-            # but always move forward so the loop cannot get stuck
-            start = max(end - chunk_overlap, start + 1)
+            # then move to the next word boundary so a chunk never starts mid-word
+            next_start = end - chunk_overlap
+            space = text.find(" ", next_start, end)
+            if space != -1:
+                next_start = space + 1
+            # Always move forward so the loop cannot get stuck
+            start = max(next_start, start + 1)
 
         return chunks
