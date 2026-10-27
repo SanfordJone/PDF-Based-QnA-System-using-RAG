@@ -1,166 +1,119 @@
-import os
+import re
 import uuid
+
+_WORD = re.compile(r"[a-z0-9]+")
+_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "do", "does", "for", "from", "how",
+    "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "what",
+    "when", "where", "which", "who", "why", "with",
+}
+
+
+def _terms(text):
+    return {w for w in _WORD.findall(text.lower()) if w not in _STOPWORDS}
+
 
 class VectorStore:
     """
-    Class for creating and managing vector embeddings and search functionality
-    with a fallback to simple text search if ChromaDB is not available
+    Stores document chunks and finds the ones most relevant to a question.
+
+    Uses ChromaDB embeddings (cosine similarity) when ChromaDB is installed,
+    otherwise falls back to keyword overlap scoring.
+
+    Each instance gets its own in-memory collection, so one user's uploads
+    never appear in another user's search results and nothing is written to disk.
     """
-    
-    def __init__(self, collection_name="pdf_documents", persist_directory="./chroma_db"):
-        """Initialize the vector store"""
-        # Dictionary to track documents by ID
-        self.documents = {}
-        
-        # Flag to determine if we're using ChromaDB or fallback
+
+    def __init__(self, use_chromadb=True):
+        self.chunks = {}  # chunk_id -> {"text": ..., "metadata": ...}
         self.using_chromadb = False
-        
-        # Try to initialize ChromaDB
-        try:
-            import chromadb
-            from chromadb.config import Settings
-            
-            # Ensure the persist directory exists
-            os.makedirs(persist_directory, exist_ok=True)
-            
-            # Initialize ChromaDB client
-            self.client = chromadb.PersistentClient(path=persist_directory)
-            
-            # Get or create collection
-            self.collection = self.client.get_or_create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
-            
-            self.using_chromadb = True
-            print("Using ChromaDB for vector search")
-        except ImportError:
-            print("ChromaDB not available, using simple text search fallback")
-    
-    def add_document(self, text, metadata=None):
-        """
-        Add a document to the vector store
-        
-        Args:
-            text (str): Document text
-            metadata (dict, optional): Document metadata
-        
-        Returns:
-            str: Document ID
-        """
-        if not text:
-            return None
-            
-        # Generate a unique document ID
-        doc_id = str(uuid.uuid4())
-        
-        # Add metadata if provided, or create empty dict
-        doc_metadata = metadata or {}
-        doc_metadata['doc_id'] = doc_id
-        
-        # Store document in our tracking dictionary
-        self.documents[doc_id] = {
-            'text': text,
-            'metadata': doc_metadata
-        }
-        
-        # Add document to ChromaDB if available
-        if self.using_chromadb:
+
+        if use_chromadb:
             try:
-                self.collection.add(
-                    documents=[text],
-                    metadatas=[doc_metadata],
-                    ids=[doc_id]
+                import chromadb
+
+                self.client = chromadb.EphemeralClient()
+                self.collection = self.client.get_or_create_collection(
+                    name=f"pdf_{uuid.uuid4().hex}",
+                    metadata={"hnsw:space": "cosine"},
                 )
-            except Exception as e:
-                print(f"Error adding document to ChromaDB: {e}")
-        
-        return doc_id
-    
-    def search(self, query, k=5):
+                self.using_chromadb = True
+            except ImportError:
+                pass
+
+    def add_chunks(self, chunks, metadata=None):
         """
-        Search for documents similar to the query
-        
+        Add a list of text chunks that belong to one document
+
         Args:
-            query (str): Query text
-            k (int): Number of results to return
-            
+            chunks (list): Chunk strings
+            metadata (dict or list): Shared metadata, or one dict per chunk
+
         Returns:
-            list: List of dicts containing matched documents and metadata
+            list: IDs of the stored chunks
         """
+        ids, texts, metas = [], [], []
+        for i, text in enumerate(chunks):
+            if not text or not text.strip():
+                continue
+            meta = dict(metadata[i] if isinstance(metadata, list) else (metadata or {}))
+            chunk_id = str(uuid.uuid4())
+            self.chunks[chunk_id] = {"text": text, "metadata": meta}
+            ids.append(chunk_id)
+            texts.append(text)
+            metas.append(meta)
+
+        if ids and self.using_chromadb:
+            self.collection.add(ids=ids, documents=texts, metadatas=metas)
+        return ids
+
+    def search(self, query, k=4):
+        """
+        Find the chunks most relevant to the query
+
+        Returns:
+            list: Dicts with 'text', 'metadata', 'id' and 'score' (higher is better)
+        """
+        if not query or not query.strip() or not self.chunks:
+            return []
+        k = min(k, len(self.chunks))
+
         if self.using_chromadb:
-            try:
-                results = self.collection.query(
-                    query_texts=[query],
-                    n_results=k
-                )
-                
-                matches = []
-                if results and results['documents']:
-                    for i, doc_id in enumerate(results['ids'][0]):
-                        matches.append({
-                            'document': results['documents'][0][i],
-                            'metadata': results['metadatas'][0][i] if results['metadatas'] else {},
-                            'id': doc_id
-                        })
-                        
-                return matches
-            except Exception as e:
-                print(f"Error searching with ChromaDB: {e}")
-                # Fall back to simple search if ChromaDB search fails
-        
-        # Simple search fallback - search for the query in the document text
-        matches = []
-        query = query.lower()
-        
-        for doc_id, doc_data in self.documents.items():
-            if query in doc_data['text'].lower():
+            results = self.collection.query(query_texts=[query], n_results=k)
+            matches = []
+            for i, chunk_id in enumerate(results["ids"][0]):
                 matches.append({
-                    'document': doc_data['text'],
-                    'metadata': doc_data['metadata'],
-                    'id': doc_id
+                    "text": results["documents"][0][i],
+                    "metadata": results["metadatas"][0][i] or {},
+                    "id": chunk_id,
+                    # cosine distance -> similarity
+                    "score": 1 - results["distances"][0][i],
                 })
-                
-                if len(matches) >= k:
-                    break
-        
-        return matches
-    
-    def get_document(self, doc_id):
-        """
-        Get a document by ID
-        
-        Args:
-            doc_id (str): Document ID
-            
-        Returns:
-            dict: Document data or None if not found
-        """
-        return self.documents.get(doc_id)
-    
-    def delete_document(self, doc_id):
-        """
-        Delete a document from the vector store
-        
-        Args:
-            doc_id (str): Document ID
-        """
-        if doc_id in self.documents:
-            if self.using_chromadb:
-                try:
-                    self.collection.delete(ids=[doc_id])
-                except Exception as e:
-                    print(f"Error deleting document from ChromaDB: {e}")
-            
-            del self.documents[doc_id]
-            return True
-        return False
-    
-    def get_all_documents(self):
-        """
-        Get all documents in the vector store
-        
-        Returns:
-            list: List of document data
-        """
-        return list(self.documents.values())
+            return matches
+
+        # Keyword fallback: fraction of the question's terms found in each chunk
+        query_terms = _terms(query)
+        if not query_terms:
+            return []
+        scored = []
+        for chunk_id, data in self.chunks.items():
+            overlap = len(query_terms & _terms(data["text"]))
+            if overlap:
+                scored.append((overlap / len(query_terms), chunk_id))
+        scored.sort(key=lambda s: s[0], reverse=True)
+        return [
+            {"text": self.chunks[cid]["text"], "metadata": self.chunks[cid]["metadata"], "id": cid, "score": score}
+            for score, cid in scored[:k]
+        ]
+
+    def delete_document(self, filename):
+        """Remove every chunk that came from the given file."""
+        ids = [cid for cid, d in self.chunks.items() if d["metadata"].get("filename") == filename]
+        for cid in ids:
+            del self.chunks[cid]
+        if ids and self.using_chromadb:
+            self.collection.delete(ids=ids)
+        return len(ids)
+
+    def __len__(self):
+        return len(self.chunks)
