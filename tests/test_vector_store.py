@@ -40,3 +40,19 @@ def test_sessions_do_not_share_documents():
     b = VectorStore(use_chromadb=False)
     assert len(a) == 2 and len(b) == 0
     assert b.search("refunds") == []
+
+
+class BrokenCollection:
+    def add(self, **kwargs):
+        raise RuntimeError("embedding model could not be downloaded")
+
+    def query(self, **kwargs):
+        raise RuntimeError("embedding model could not be downloaded")
+
+
+def test_falls_back_to_keywords_when_embeddings_fail():
+    store = VectorStore(use_chromadb=False)
+    store.using_chromadb, store.collection = True, BrokenCollection()
+    store.add_chunks(["Refunds are processed within 14 days."], {"filename": "a.pdf", "page": 1})
+    assert store.using_chromadb is False
+    assert store.search("refunds")[0]["metadata"]["page"] == 1

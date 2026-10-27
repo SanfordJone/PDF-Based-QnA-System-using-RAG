@@ -64,7 +64,12 @@ class VectorStore:
             metas.append(meta)
 
         if ids and self.using_chromadb:
-            self.collection.add(ids=ids, documents=texts, metadatas=metas)
+            try:
+                self.collection.add(ids=ids, documents=texts, metadatas=metas)
+            except Exception:
+                # e.g. the embedding model cannot be downloaded offline.
+                # The chunks are already kept in self.chunks, so keep working with keyword search.
+                self.using_chromadb = False
         return ids
 
     def search(self, query, k=4):
@@ -79,17 +84,20 @@ class VectorStore:
         k = min(k, len(self.chunks))
 
         if self.using_chromadb:
-            results = self.collection.query(query_texts=[query], n_results=k)
-            matches = []
-            for i, chunk_id in enumerate(results["ids"][0]):
-                matches.append({
-                    "text": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i] or {},
-                    "id": chunk_id,
-                    # cosine distance -> similarity
-                    "score": 1 - results["distances"][0][i],
-                })
-            return matches
+            try:
+                results = self.collection.query(query_texts=[query], n_results=k)
+                matches = []
+                for i, chunk_id in enumerate(results["ids"][0]):
+                    matches.append({
+                        "text": results["documents"][0][i],
+                        "metadata": results["metadatas"][0][i] or {},
+                        "id": chunk_id,
+                        # cosine distance -> similarity
+                        "score": 1 - results["distances"][0][i],
+                    })
+                return matches
+            except Exception:
+                self.using_chromadb = False
 
         # Keyword fallback: fraction of the question's terms found in each chunk
         query_terms = _terms(query)
