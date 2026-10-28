@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets and local config
+.env
+
+# Local vector database
+chroma_db/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

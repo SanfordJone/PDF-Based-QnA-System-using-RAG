@@ -1,0 +1,19 @@
+# Runs the app and Ollama together:  docker compose up --build
+# Then pull the model once:          docker compose exec ollama ollama pull llama3.1
+services:
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama:/root/.ollama
+
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      - ollama
+
+volumes:
+  ollama:
