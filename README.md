@@ -82,4 +82,4 @@ Only upload documents you have the right to use.
 
 ## History
 
-First version built in April to May 2025. Reworked in October 2026 with help from an AI coding assistant (Claude): fixed the chunk overlap bug and the Ollama client, connected the app to a real RAG pipeline (the earlier version only used keyword matching), and added input validation, prompt injection defences, tests, CI and Docker. See the commit history for each change.
+First version built in April to May 2025. Reworked in October 2026: fixed the chunk overlap bug and the Ollama client, connected the app to a real RAG pipeline (the earlier version only used keyword matching), and added input validation, prompt injection defences, tests, CI and Docker. See the commit history for each change.
